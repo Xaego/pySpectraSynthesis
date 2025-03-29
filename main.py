@@ -1,275 +1,324 @@
 import streamlit as st
-import pandas as pd
+import polars as pl
 import numpy as np
 import plotly.graph_objects as go
 import os
 import io
 
-# Настройка страницы
+# Page configuration
 st.set_page_config(
-    page_title="Анализатор спектров",
+    page_title="Spectrum Analyzer",
     page_icon="📊",
     layout="wide"
 )
 
-# Заголовок приложения
-st.title("Анализатор спектров излучателей и фильтров")
+# Application title
+st.title("Emitter and Filter Spectrum Analyzer")
 
-# Функция для загрузки данных излучателей из Excel файла
+# Function to load emitter data from Parquet file
 def load_emitters_data():
     """
-    Загружает данные об излучателях из Excel-файла (ODS/XLS/XLSX)
+    Loads emitter data from a Parquet file
 
     Returns:
-        dict: Словарь с данными излучателей
+        dict: Dictionary with emitter data
     """
-    # Получаем текущий каталог скрипта
+    # Get the script directory
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    # Варианты путей к файлу
+    # Possible file paths
     possible_paths = [
-        os.path.join("data", "light_sources", "light_sources.ods"),  # Относительно рабочего каталога
-        os.path.join(script_dir, "data", "light_sources", "light_sources.ods"),  # Относительно скрипта
-        os.path.join(script_dir, "..", "data", "light_sources", "light_sources.ods"),  # Один уровень вверх
-        os.path.join(os.getcwd(), "data", "light_sources", "light_sources.ods"),  # Явно из текущего рабочего каталога
-        # Альтернативные расширения файлов
-        os.path.join("data", "light_sources", "Light_sources.xlsx"),
-        os.path.join("data", "light_sources", "Light_sources.xls"),
-        os.path.join(script_dir, "data", "light_sources", "Light_sources.xlsx"),
-        os.path.join(script_dir, "data", "light_sources", "Light_sources.xls"),
+        os.path.join("data", "light_sources", "light_sources.parquet"),  # Relative to working directory
+        os.path.join(script_dir, "data", "light_sources", "light_sources.parquet"),  # Relative to script
+        os.path.join(script_dir, "..", "data", "light_sources", "light_sources.parquet"),  # One level up
+        os.path.join(os.getcwd(), "data", "light_sources", "light_sources.parquet"),  # Explicitly from current working directory
     ]
 
-    # Позволяем пользователю загрузить файл вручную, если автоматически не находим
-    uploaded_file = st.sidebar.file_uploader("Или загрузите файл с данными излучателей",
-                                             type=["ods", "xlsx", "xls"])
+    # Allow user to upload a file manually if not found automatically
+    uploaded_file = st.sidebar.file_uploader("Or upload a file with emitter data",
+                                             type=["parquet"])
 
-    # Словарь для хранения данных излучателей
+    # Dictionary to store emitter data
     emitters = {}
     file_path_used = None
     error_messages = []
 
-    # Сначала проверяем загруженный файл, если он есть
+    # First check the uploaded file, if present
     if uploaded_file is not None:
         try:
-            # Для загруженного файла используем pandas
-            df_dict = pd.read_excel(uploaded_file, sheet_name=None)
-            file_path_used = "Загруженный файл"
-            st.sidebar.success("Файл успешно загружен!")
+            # Read the bytes directly using a BytesIO object
+            file_bytes = uploaded_file.getvalue()
 
-            # Обрабатываем каждый лист
-            for sheet_name, df in df_dict.items():
-                emitters.update(process_dataframe(sheet_name, df))
+            # Read the parquet file with polars
+            df = pl.read_parquet(io.BytesIO(file_bytes))
+            file_path_used = "Uploaded file"
+            st.sidebar.success("File successfully loaded!")
+
+            # Process the dataframe
+            emitters = process_dataframe(df)
 
         except Exception as e:
-            error_messages.append(f"Ошибка при чтении загруженного файла: {str(e)}")
+            error_messages.append(f"Error reading uploaded file: {str(e)}")
 
-    # Если загруженного файла нет или при его чтении возникла ошибка, пробуем пути
+    # If no uploaded file or error occurred, try the paths
     if not emitters:
         for path in possible_paths:
             try:
                 if os.path.exists(path):
-                    # Используем pandas для чтения файла
-                    df_dict = pd.read_excel(path, sheet_name=None)
+                    # Use polars to read the file
+                    df = pl.read_parquet(path)
                     file_path_used = path
 
-                    # Обрабатываем каждый лист
-                    for sheet_name, df in df_dict.items():
-                        emitters.update(process_dataframe(sheet_name, df))
+                    # Process the dataframe
+                    emitters = process_dataframe(df)
 
                     break
             except Exception as e:
-                error_messages.append(f"Ошибка при чтении файла {path}: {str(e)}")
+                error_messages.append(f"Error reading file {path}: {str(e)}")
 
-    # Если данные загружены успешно
+    # If data loaded successfully
     if emitters:
-        st.sidebar.success(f"Данные успешно загружены из: {file_path_used}")
+        st.sidebar.success(f"Data successfully loaded from: {file_path_used}")
         return emitters
 
-    # Если данные не удалось загрузить, выводим ошибку и подробности
+    # If data could not be loaded, show error and details
     error_details = "\n".join(error_messages)
-    st.error(f"Не удалось загрузить данные из файла. Попробуйте загрузить файл вручную через боковую панель.")
-    with st.expander("Подробности ошибки"):
+    st.error(f"Failed to load data from file. Try uploading a file manually through the sidebar.")
+    with st.expander("Error details"):
         st.code(error_details)
-        st.markdown("**Текущий рабочий каталог:** " + os.getcwd())
-        st.markdown("**Попробуйте следующее:**")
+        st.markdown("**Current working directory:** " + os.getcwd())
+        st.markdown("**Try the following:**")
         st.markdown("""
-        1. Убедитесь, что файл существует и имеет правильное расширение (`.ods`, `.xlsx` или `.xls`)
-        2. Проверьте структуру проекта: файл должен находиться в `data/light_sources/light_sources.ods`
-        3. Загрузите файл напрямую через интерфейс загрузки в боковой панели
-        4. Убедитесь, что установлены пакеты для работы с Excel: `pip install pandas openpyxl odfpy`
+        1. Make sure the file exists and has the correct extension (`.parquet`)
+        2. Check the project structure: file should be in `data/light_sources/light_sources.parquet`
+        3. Upload the file directly through the upload interface in the sidebar
+        4. Make sure the required packages are installed: `pip install polars pyarrow`
         """)
 
     return {}
 
-# Вспомогательная функция для обработки DataFrame с данными
-def process_dataframe(sheet_name, df):
+# Helper function to process dataframe with data
+def process_dataframe(df):
     """
-    Обрабатывает DataFrame с данными спектра и извлекает нужные столбцы
+    Processes a DataFrame with spectrum data and extracts necessary columns
 
     Args:
-        sheet_name (str): Имя листа/спектра
-        df (pd.DataFrame): DataFrame с данными
+        df (pl.DataFrame): DataFrame with spectrum data
 
     Returns:
-        dict: Словарь с обработанными данными
+        dict: Dictionary with processed data
     """
     emitters = {}
 
-    # Проверяем наличие нужных столбцов
-    wavelength_col = None
-    intensity_col = None
+    # Check if we need to group by company/device_id
+    if "company" in df.columns and "device_id" in df.columns:
+        # Get unique combinations of company and device_id
+        unique_devices = df.select(["company", "device_id"]).unique()
 
-    for col in df.columns:
-        col_lower = str(col).lower()
-        if 'wavelength' in col_lower or 'длина волны' in col_lower or 'нм' in col_lower or 'nm' in col_lower:
-            wavelength_col = col
-        if 'intensity' in col_lower or 'интенсивность' in col_lower or 'relative' in col_lower:
-            intensity_col = col
+        # Process each unique device
+        for row in unique_devices.iter_rows(named=True):
+            company = row["company"]
+            device_id = row["device_id"]
 
-    # Если нашли нужные столбцы
-    if wavelength_col is not None and intensity_col is not None:
-        # Извлекаем данные, игнорируя NaN значения
-        wavelengths = []
-        intensities = []
+            # Filter data for this specific device
+            data_df = df.filter(
+                (pl.col("company") == company) &
+                (pl.col("device_id") == device_id)
+            )
 
-        for _, row in df.iterrows():
-            try:
-                wavelength = float(row[wavelength_col])
-                intensity = float(row[intensity_col])
-                if not (np.isnan(wavelength) or np.isnan(intensity)):
-                    wavelengths.append(wavelength)
-                    intensities.append(intensity)
-            except (ValueError, TypeError):
-                # Пропускаем ошибочные строки
-                pass
+            # Find wavelength and intensity columns - use specific column names from the screenshot
+            wavelength_col = "wave_nm" if "wave_nm" in data_df.columns else None
+            intensity_col = "int_au" if "int_au" in data_df.columns else None
 
-        # Если есть данные, добавляем в словарь
-        if wavelengths and intensities:
-            emitters[sheet_name] = {
-                'wavelengths': wavelengths,
-                'intensities': intensities
-            }
+            # If specific columns not found, try generic detection
+            if wavelength_col is None or intensity_col is None:
+                for col in data_df.columns:
+                    col_lower = str(col).lower()
+                    if wavelength_col is None and ("wavelength" in col_lower or "длина волны" in col_lower or "нм" in col_lower or "nm" in col_lower):
+                        wavelength_col = col
+                    if intensity_col is None and ("intensity" in col_lower or "интенсивность" in col_lower or "relative" in col_lower):
+                        intensity_col = col
+
+            # If we found the necessary columns
+            if wavelength_col is not None and intensity_col is not None:
+                # Convert to numpy arrays for processing
+                wavelengths = data_df[wavelength_col].to_numpy()
+                intensities = data_df[intensity_col].to_numpy()
+
+                # Remove NaN values
+                valid_indices = ~np.isnan(wavelengths) & ~np.isnan(intensities)
+                clean_wavelengths = wavelengths[valid_indices]
+                clean_intensities = intensities[valid_indices]
+
+                # If we have data, add to dictionary
+                if len(clean_wavelengths) > 0 and len(clean_intensities) > 0:
+                    emitter_name = f"{company} {device_id}"
+                    emitters[emitter_name] = {
+                        'wavelengths': clean_wavelengths.tolist(),
+                        'intensities': clean_intensities.tolist()
+                    }
+    else:
+        # Assume simple structure with wavelength and intensity columns
+        wavelength_col = None
+        intensity_col = None
+
+        for col in df.columns:
+            col_lower = col.lower()
+            if "wavelength" in col_lower or "wave_nm" in col_lower or "nm" in col_lower:
+                wavelength_col = col
+            if "intensity" in col_lower or "int_au" in col_lower or "relative" in col_lower:
+                intensity_col = col
+
+        # If we found the necessary columns
+        if wavelength_col is not None and intensity_col is not None:
+            # Convert to numpy arrays for processing
+            wavelengths = df[wavelength_col].to_numpy()
+            intensities = df[intensity_col].to_numpy()
+
+            # Remove NaN values
+            valid_indices = ~np.isnan(wavelengths) & ~np.isnan(intensities)
+            clean_wavelengths = wavelengths[valid_indices]
+            clean_intensities = intensities[valid_indices]
+
+            # If we have data, add to dictionary
+            if len(clean_wavelengths) > 0 and len(clean_intensities) > 0:
+                emitters["Default Emitter"] = {
+                    'wavelengths': clean_wavelengths.tolist(),
+                    'intensities': clean_intensities.tolist()
+                }
 
     return emitters
 
-# Функция для создания модельного спектра фильтра
+# Function to create a model filter spectrum
 def create_filter_spectrum(center, width, min_wavelength=350, max_wavelength=800, step=1):
     """
-    Создает модельный спектр полосового фильтра
+    Creates a model bandpass filter spectrum
 
     Args:
-        center (float): Центральная длина волны фильтра (нм)
-        width (float): Ширина полосы пропускания FWHM (нм)
-        min_wavelength (float): Минимальная длина волны (нм)
-        max_wavelength (float): Максимальная длина волны (нм)
-        step (float): Шаг по длине волны (нм)
+        center (float): Central wavelength of the filter (nm)
+        width (float): Bandwidth FWHM (nm)
+        min_wavelength (float): Minimum wavelength (nm)
+        max_wavelength (float): Maximum wavelength (nm)
+        step (float): Wavelength step (nm)
 
     Returns:
-        pd.DataFrame: DataFrame с длинами волн и коэффициентом пропускания
+        pl.DataFrame: DataFrame with wavelengths and transmission coefficient
     """
     wavelengths = np.arange(min_wavelength, max_wavelength, step)
 
-    # Создаем полосовой фильтр, использую функцию супергаусса
-    # для более резких краев полосы пропускания
-    n = 10  # Показатель степени (влияет на крутизну склонов)
+    # Create a bandpass filter using a super-gaussian function
+    # for sharper band edges
+    n = 10  # Exponent (affects slope steepness)
     transmission = np.exp(-0.5 * ((wavelengths - center) / (width/2))**(2*n))
 
-    return pd.DataFrame({
+    return pl.DataFrame({
         'wavelength': wavelengths,
         'transmission': transmission
     })
 
-# Функция для расчета результирующего спектра
+# Function to calculate the resulting spectrum
 def calculate_resulting_spectrum(emitter_data, filter_dfs):
     """
-    Рассчитывает результирующий спектр после применения фильтров к излучателю.
+    Calculates the resulting spectrum after applying filters to the emitter.
 
     Args:
-        emitter_data (dict): Данные спектра излучателя
-        filter_dfs (list): Список DataFrame'ов фильтров
+        emitter_data (dict): Emitter spectrum data
+        filter_dfs (list): List of filter DataFrames
 
     Returns:
-        pd.DataFrame: DataFrame с результирующим спектром
+        pl.DataFrame: DataFrame with the resulting spectrum
     """
     if not emitter_data or len(filter_dfs) == 0:
         return None
 
-    # Создаем DataFrame для излучателя
-    emitter_df = pd.DataFrame({
+    # Create DataFrame for the emitter
+    emitter_df = pl.DataFrame({
         'wavelength': emitter_data['wavelengths'],
         'intensity': emitter_data['intensities']
     })
 
-    result = emitter_df.copy()
-    result['resulting_intensity'] = result['intensity']
+    # Create a copy for the result
+    wavelengths = emitter_df['wavelength'].to_numpy()
+    intensities = emitter_df['intensity'].to_numpy()
+    resulting_intensities = intensities.copy()
 
-    # Применяем каждый фильтр
+    # Apply each filter
     for filter_df in filter_dfs:
         if filter_df is not None:
-            # Интерполяция данных фильтра на сетку длин волн излучателя
+            # Interpolate filter data to the emitter wavelength grid
+            filter_wavelengths = filter_df['wavelength'].to_numpy()
+            filter_transmissions = filter_df['transmission'].to_numpy()
+
             interp_transmission = np.interp(
-                result['wavelength'],
-                filter_df['wavelength'],
-                filter_df['transmission'],
+                wavelengths,
+                filter_wavelengths,
+                filter_transmissions,
                 left=0, right=0
             )
-            # Умножаем интенсивность на коэффициент пропускания
-            result['resulting_intensity'] *= interp_transmission
+            # Multiply intensity by the transmission coefficient
+            resulting_intensities *= interp_transmission
+
+    # Create the result DataFrame
+    result = pl.DataFrame({
+        'wavelength': wavelengths,
+        'intensity': intensities,
+        'resulting_intensity': resulting_intensities
+    })
 
     return result
 
-# Создаем боковую панель для ввода параметров
+# Create sidebar for parameter input
 with st.sidebar:
-    st.header("Параметры")
+    st.header("Parameters")
 
-# Загружаем данные излучателей
+# Load emitter data
 emitters_data = load_emitters_data()
 emitter_names = list(emitters_data.keys())
 
-# Если данные не загружены, показываем демо данные
+# If no data loaded, show demo data
 if not emitter_names:
-    st.warning("Используются демонстрационные данные, так как не удалось загрузить файл. Загрузите файл через боковую панель для работы с реальными данными.")
+    st.warning("Using demonstration data, as the file could not be loaded. Upload a file through the sidebar to work with real data.")
 
-    # Создаем демонстрационные данные
+    # Create demonstration data
     demo_wavelengths = np.arange(350, 800, 1)
 
-    # Создаем два демо-излучателя с разными спектрами
+    # Create two demo emitters with different spectra
     demo_green = np.exp(-((demo_wavelengths - 550)**2) / (2 * 30**2))
     demo_blue = np.exp(-((demo_wavelengths - 470)**2) / (2 * 25**2))
 
     emitters_data = {
-        "Демо: Зеленый (550нм)": {
+        "Demo: Green (550nm)": {
             'wavelengths': demo_wavelengths.tolist(),
             'intensities': demo_green.tolist()
         },
-        "Демо: Синий (470нм)": {
+        "Demo: Blue (470nm)": {
             'wavelengths': demo_wavelengths.tolist(),
             'intensities': demo_blue.tolist()
         }
     }
     emitter_names = list(emitters_data.keys())
 
-# Продолжаем настройку боковой панели
+# Continue sidebar setup
 with st.sidebar:
-    # Выбор излучателя из загруженных данных
-    selected_emitter = st.selectbox("Излучатель", emitter_names)
+    # Select emitter from loaded data
+    selected_emitter = st.selectbox("Emitter", emitter_names)
 
-    # Секция для добавления фильтров
-    st.subheader("Фильтры")
+    # Section for adding filters
+    st.subheader("Filters")
 
-    # Количество фильтров
-    num_filters = st.number_input("Количество фильтров", min_value=1, max_value=10, value=1)
+    # Number of filters
+    num_filters = st.number_input("Number of filters", min_value=1, max_value=10, value=1)
 
-    # Создаем список для хранения параметров фильтров
+    # Create a list to store filter parameters
     filter_params = []
 
-    # Добавляем поля ввода для каждого фильтра
+    # Add input fields for each filter
     for i in range(num_filters):
-        st.markdown(f"**Фильтр {i+1}**")
-        filter_center = st.number_input(f"Центральная длина волны (нм)",
+        st.markdown(f"**Filter {i+1}**")
+        filter_center = st.number_input(f"Central wavelength (nm)",
                                         min_value=350.0, max_value=800.0,
                                         value=550.0, key=f"center_{i}")
-        filter_width = st.number_input(f"Ширина FWHM (нм)",
+        filter_width = st.number_input(f"Width FWHM (nm)",
                                        min_value=1.0, max_value=200.0,
                                        value=40.0, key=f"width_{i}")
         filter_params.append({
@@ -277,145 +326,159 @@ with st.sidebar:
             'width': filter_width
         })
 
-# Получаем данные выбранного излучателя
+# Get data for the selected emitter
 selected_emitter_data = emitters_data.get(selected_emitter)
 
-# Создаем спектры фильтров на основе введенных параметров
+# Create filter spectra based on the input parameters
 filter_spectra = []
 for params in filter_params:
     filter_spectrum = create_filter_spectrum(params['center'], params['width'])
     filter_spectra.append(filter_spectrum)
 
-# Рассчитываем результирующий спектр
+# Calculate the resulting spectrum
 resulting_spectrum = calculate_resulting_spectrum(selected_emitter_data, filter_spectra)
 
-# Создаем контейнеры для графиков
+# Create containers for graphs
 col1, col2 = st.columns(2)
 
-# График спектра излучателя
+# Emitter spectrum graph
 with col1:
-    st.subheader(f"Спектр излучателя: {selected_emitter}")
+    st.subheader(f"Emitter spectrum: {selected_emitter}")
     if selected_emitter_data:
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=selected_emitter_data['wavelengths'],
             y=selected_emitter_data['intensities'],
             mode='lines',
-            name='Излучатель'
+            name='Emitter'
         ))
         fig.update_layout(
-            xaxis_title='Длина волны (нм)',
-            yaxis_title='Относительная интенсивность',
+            xaxis_title='Wavelength (nm)',
+            yaxis_title='Relative intensity',
             height=400
         )
         st.plotly_chart(fig, use_container_width=True)
 
-# График спектров фильтров
+# Filter spectra graph
 with col2:
-    st.subheader("Спектры фильтров")
+    st.subheader("Filter spectra")
     if filter_spectra:
         fig = go.Figure()
         for i, filter_spectrum in enumerate(filter_spectra):
             params = filter_params[i]
             fig.add_trace(go.Scatter(
-                x=filter_spectrum['wavelength'],
-                y=filter_spectrum['transmission'],
+                x=filter_spectrum['wavelength'].to_numpy(),
+                y=filter_spectrum['transmission'].to_numpy(),
                 mode='lines',
-                name=f'Фильтр {i+1} ({params["center"]} нм, {params["width"]} нм)'
+                name=f'Filter {i+1} ({params["center"]} nm, {params["width"]} nm)'
             ))
         fig.update_layout(
-            xaxis_title='Длина волны (нм)',
-            yaxis_title='Коэффициент пропускания',
+            xaxis_title='Wavelength (nm)',
+            yaxis_title='Transmission coefficient',
             height=400
         )
         st.plotly_chart(fig, use_container_width=True)
 
-# График результирующего спектра
-st.subheader("Результирующий спектр")
+# Resulting spectrum graph
+st.subheader("Resulting spectrum")
 if resulting_spectrum is not None:
+    wavelengths = resulting_spectrum['wavelength'].to_numpy()
+    intensities = resulting_spectrum['intensity'].to_numpy()
+    result_intensities = resulting_spectrum['resulting_intensity'].to_numpy()
+
     fig = go.Figure()
-    # Исходный спектр излучателя (с низкой непрозрачностью)
+    # Original emitter spectrum (with low opacity)
     fig.add_trace(go.Scatter(
-        x=resulting_spectrum['wavelength'],
-        y=resulting_spectrum['intensity'],
+        x=wavelengths,
+        y=intensities,
         mode='lines',
-        name='Исходный',
+        name='Original',
         line=dict(color='gray', width=1, dash='dash'),
         opacity=0.5
     ))
-    # Результирующий спектр
+    # Resulting spectrum
     fig.add_trace(go.Scatter(
-        x=resulting_spectrum['wavelength'],
-        y=resulting_spectrum['resulting_intensity'],
+        x=wavelengths,
+        y=result_intensities,
         mode='lines',
-        name='Результирующий',
+        name='Resulting',
         line=dict(color='blue', width=2),
     ))
     fig.update_layout(
-        xaxis_title='Длина волны (нм)',
-        yaxis_title='Относительная интенсивность',
+        xaxis_title='Wavelength (nm)',
+        yaxis_title='Relative intensity',
         height=500
     )
     st.plotly_chart(fig, use_container_width=True)
 
-# Информация о результатах
+# Information about results
 if resulting_spectrum is not None:
-    with st.expander("Статистика результирующего спектра"):
-        # Находим пиковую длину волны
-        peak_idx = resulting_spectrum['resulting_intensity'].idxmax()
-        peak_wavelength = resulting_spectrum.loc[peak_idx, 'wavelength']
-        peak_intensity = resulting_spectrum.loc[peak_idx, 'resulting_intensity']
+    with st.expander("Resulting spectrum statistics"):
+        # Find peak wavelength
+        result_intensities = resulting_spectrum['resulting_intensity'].to_numpy()
+        wavelengths = resulting_spectrum['wavelength'].to_numpy()
 
-        # Вычисляем FWHM (полная ширина на половине максимума)
+        peak_idx = np.argmax(result_intensities)
+        peak_wavelength = wavelengths[peak_idx]
+        peak_intensity = result_intensities[peak_idx]
+
+        # Calculate FWHM (full width at half maximum)
         half_max = peak_intensity / 2
-        above_half_max = resulting_spectrum[resulting_spectrum['resulting_intensity'] >= half_max]
-        if not above_half_max.empty and len(above_half_max) > 1:
-            min_wl = above_half_max['wavelength'].min()
-            max_wl = above_half_max['wavelength'].max()
+        above_half_max = wavelengths[result_intensities >= half_max]
+        if len(above_half_max) > 1:
+            min_wl = above_half_max.min()
+            max_wl = above_half_max.max()
             fwhm = max_wl - min_wl
         else:
-            fwhm = "Не удалось рассчитать"
+            fwhm = "Could not calculate"
 
-        # Вычисляем интегральную интенсивность
+        # Calculate integral intensity
+        intensities = resulting_spectrum['intensity'].to_numpy()
         integral_intensity = np.trapz(
-            resulting_spectrum['resulting_intensity'],
-            resulting_spectrum['wavelength']
+            result_intensities,
+            wavelengths
         )
 
-        # Отображаем статистику
+        # Display statistics
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("Пиковая длина волны", f"{peak_wavelength:.1f} нм")
+            st.metric("Peak wavelength", f"{peak_wavelength:.1f} nm")
         with col2:
-            st.metric("FWHM", f"{fwhm if isinstance(fwhm, str) else fwhm:.1f} нм")
+            st.metric("FWHM", f"{fwhm if isinstance(fwhm, str) else fwhm:.1f} nm")
         with col3:
-            # Нормируем интегральную интенсивность относительно исходной
+            # Normalize integral intensity relative to original
             original_integral = np.trapz(
-                resulting_spectrum['intensity'],
-                resulting_spectrum['wavelength']
+                intensities,
+                wavelengths
             )
             relative_intensity = (integral_intensity / original_integral) * 100
-            st.metric("Относительная интенсивность", f"{relative_intensity:.1f}%")
+            st.metric("Relative intensity", f"{relative_intensity:.1f}%")
 
-# Дополнительная информация
-with st.expander("Информация о проекте"):
+# Additional information
+with st.expander("Project information"):
     st.markdown("""
-    ### О проекте
-    Это приложение позволяет анализировать спектры излучателей и фильтров.
+    ### About the project
+    This application allows you to analyze emitter spectra and filters.
 
-    **Функциональность:**
-    - Отображение спектра излучателя из локального файла данных
-    - Моделирование спектров фильтров с заданными параметрами
-    - Расчет и отображение результирующего спектра
-    - Анализ характеристик результирующего спектра
+    **Functionality:**
+    - Display emitter spectrum from local data file
+    - Model filter spectra with specified parameters
+    - Calculate and display the resulting spectrum
+    - Analyze characteristics of the resulting spectrum
 
-    **Структура проекта:**
+    **Project structure:**
     ```
     web_apps/
     ├── venv/
     ├── data/
     │   └── light_sources/
-    │       └── light_sources.ods
-    └── main.py
+    │       ├── light_sources.ods
+    │       ├── light_sources.parquet
+    │       └── light_sources.xlsx
+    ├── manual_scripts/
+    │   ├── ods_to_parquet.py
+    │   ├── parquet_reader.py
+    │   └── main.py
+    └── README.md
     ```
     """)
