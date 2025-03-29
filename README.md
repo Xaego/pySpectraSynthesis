@@ -1,69 +1,135 @@
 # Spectrum Analyzer
 
-A Streamlit web application for analyzing emission spectra and filters.
+A Streamlit web application for analyzing optical spectra of emitters, filters, and detectors.
 
 ## Features
 
-- Display emitter spectrum from local data files
-- Model filter spectra with specified parameters
-- Calculate and display the resulting spectrum
-- Analyze characteristics of the resulting spectrum
+- Visualize and analyze various light emitter spectra (LEDs, Lamps, Lasers)
+- Apply optical filters with customizable parameters:
+  - Band-pass filters with adjustable center wavelength and bandwidth
+  - Long-pass filters with customizable cutoff wavelength
+  - Short-pass filters with customizable cutoff wavelength
+- Apply detector response curves to see how detectors "see" the filtered light
+- Calculate and display key spectral statistics:
+  - Peak wavelength
+  - Full Width at Half Maximum (FWHM)
+  - Relative intensity
+- Support for both library filters and custom filter creation
+- Interactive visualizations using Plotly
 
 ## Installation
 
-1. Clone the repository
-2. Install the required dependencies:
-   ```
-   pip install streamlit polars numpy plotly
-   ```
-
-## File Structure
-
+1. Clone the repository:
+```bash
+git clone <repository-url>
+cd <repository-directory>
 ```
-web_apps/
-├── venv/
-├── data/
-│   └── light_sources/
-│       ├── light_sources.ods
-│       ├── light_sources.parquet
-│       └── light_sources.xlsx
-├── manual_scripts/
-│   ├── ods_to_parquet.py
-│   ├── parquet_reader.py
-│   └── main.py
-└── README.md
+
+2. Create and activate a virtual environment (optional but recommended):
+```bash
+# Using venv
+python -m venv venv
+# On Windows
+venv\Scripts\activate
+# On macOS/Linux
+source venv/bin/activate
+```
+
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
 ```
 
 ## Usage
 
-Run the application using Streamlit:
-
-```
+1. Run the Streamlit app:
+```bash
 streamlit run main.py
 ```
 
+2. Open your web browser and navigate to the URL shown in the terminal (typically http://localhost:8501)
+
+3. Use the sidebar to:
+   - Upload your own data in Parquet format or use the included sample data
+   - Select emitters to analyze
+   - Add and configure filters
+   - Enable detector response if needed
+
+4. The main panel will display:
+   - Emitter spectra
+   - Filter and detector transmission/sensitivity curves
+   - Resulting filtered spectrum for each emitter
+   - Spectral statistics in the expandable section
+
 ## Data Format
 
-The application uses light source spectrum data stored in Parquet format. The data should contain columns for wavelength and intensity values.
+The application expects data in Parquet format with specific column naming conventions:
 
-## Examples
+- For emitters:
+  - Identifier columns: "company" and "device_id"
+  - Type column: "type" (e.g., "LED", "Lamp", "Laser")
+  - Wavelength column: "wave_nm"
+  - Intensity column: "int_au"
 
-The application includes demonstration data if no file is loaded:
-- Demo Green (550nm)
-- Demo Blue (470nm)
+- For filters:
+  - Identifier columns: "company" and "device_id"
+  - Type column: "type" (should contain keywords like "long", "short", "band")
+  - Wavelength column: "wave_nm"
+  - Transmission column: "int_au"
 
-## Development
+- For detectors:
+  - Identifier columns: "company" and "device_id"
+  - Type column: "type"
+  - Wavelength column: "wave_nm"
+  - Sensitivity column: "int_au"
 
-The application is built with:
-- Streamlit - Web interface
-- Polars - Data manipulation
-- NumPy - Numerical operations
-- Plotly - Interactive data visualization
+## Configuration
+
+The application uses a configuration file (config.toml) to customize behavior:
+
+- Data paths
+- Spectrum wavelength range and step size
+- Default filter parameters
+- Data structure definition and keywords for column identification
+
+## Utility Scripts
+
+The project includes utility scripts for working with data files:
+
+- `parquet_reader.py`: Converts Parquet files to Excel format
+- `ods_to_parquet.py`: Converts Excel files to Parquet format
+
+## Requirements
+
+- Python 3.7+
+- Streamlit
+- Polars
+- NumPy
+- Plotly
+- Loguru
+- Pandas
+
+## Project Structure
+
+```
+.
+├── data/
+│   ├── light_sources.parquet   # Sample data
+│   ├── light_sources.xlsx      # Source data (Excel format)
+│   └── light_sources.ods       # Alternative source data (ODS format)
+├── manual_scripts/
+│   ├── ods_to_parquet.py       # Utility to convert Excel to Parquet
+│   └── parquet_reader.py       # Utility to read Parquet data
+├── config.toml                 # Application configuration
+├── main.py                     # Main Streamlit application
+├── README.md                   # This documentation
+└── requirements.txt            # Python dependencies
+```
 
 ## License
 
-[Your License Information]
+MIT
 
-## Contributors
+## Contributing
 
-[Your Name]
+[Include contribution guidelines here]
