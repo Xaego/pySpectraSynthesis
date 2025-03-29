@@ -4,6 +4,54 @@ import numpy as np
 import plotly.graph_objects as go
 import os
 import io
+import json
+
+# Load configuration from config.json
+def load_config():
+    """
+    Loads configuration from config.json
+
+    Returns:
+        dict: Configuration dictionary
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_paths = [
+        os.path.join(script_dir, "config.json"),
+        os.path.join(script_dir, "config.toml"),  # Added .toml extension
+        os.path.join(os.getcwd(), "config.json"),
+        os.path.join(os.getcwd(), "config.toml"),  # Added .toml extension
+        "config.json",
+        "config.toml"  # Added .toml extension
+    ]
+
+    for path in config_paths:
+        try:
+            if os.path.exists(path):
+                with open(path, 'r') as f:
+                    config = json.load(f)
+                return config
+        except Exception as e:
+            pass
+
+    # Default configuration if file not found
+    return {
+        "data_paths": {
+            "parquet_files": [
+                "data/light_sources.parquet"
+            ]
+        },
+        "spectrum_settings": {
+            "min_wavelength": 350,
+            "max_wavelength": 1000,
+            "step": 1
+        },
+        "filter_defaults": {
+            "center": 550.0,
+            "center_step": 50.0,
+            "width": 40.0,
+            "width_step": 5.0
+        }
+    }
 
 # Page configuration
 st.set_page_config(
@@ -12,27 +60,53 @@ st.set_page_config(
     layout="wide"
 )
 
+# Initialize session state for persistent selections
+if 'selected_emitter_index' not in st.session_state:
+    st.session_state.selected_emitter_index = 0
+
+# Add session state for emitter data to prevent recalculation
+if 'emitters_data' not in st.session_state:
+    st.session_state.emitters_data = None
+
+if 'filters_data' not in st.session_state:
+    st.session_state.filters_data = None
+
+if 'emitter_graph' not in st.session_state:
+    st.session_state.emitter_graph = None
+
 # Application title
 st.title("Emitter and Filter Spectrum Analyzer")
 
-# Function to load emitter data from Parquet file
-def load_emitters_data():
+# Load config
+config = load_config()
+
+# Function to load emitter and filter data from Parquet file
+def load_data():
     """
-    Loads emitter data from a Parquet file
+    Loads emitter and filter data from a Parquet file
 
     Returns:
-        dict: Dictionary with emitter data
+        tuple: Dictionary with emitter data, Dictionary with filter data
     """
     # Get the script directory
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
     # Possible file paths
-    possible_paths = [
-        os.path.join("data", "light_sources", "light_sources.parquet"),  # Relative to working directory
-        os.path.join(script_dir, "data", "light_sources", "light_sources.parquet"),  # Relative to script
-        os.path.join(script_dir, "..", "data", "light_sources", "light_sources.parquet"),  # One level up
-        os.path.join(os.getcwd(), "data", "light_sources", "light_sources.parquet"),  # Explicitly from current working directory
-    ]
+    config = load_config()
+    possible_paths = []
+
+    # Add paths from config
+    for path in config["data_paths"]["parquet_files"]:
+        possible_paths.append(path)
+        possible_paths.append(os.path.join(script_dir, path))
+        possible_paths.append(os.path.join(script_dir, "..", path))
+        possible_paths.append(os.path.join(os.getcwd(), path))
+
+    # Add specific paths based on the file structure from the screenshot
+    possible_paths.append(os.path.join(script_dir, "data", "light_sources.parquet"))
+    possible_paths.append(os.path.join(os.getcwd(), "data", "light_sources.parquet"))
+    # Add the direct path shown in the image
+    possible_paths.append("data/light_sources.parquet")
 
     # Allow user to upload a file manually if not found automatically
     uploaded_file = st.sidebar.file_uploader("Or upload a file with emitter data",
@@ -40,6 +114,7 @@ def load_emitters_data():
 
     # Dictionary to store emitter data
     emitters = {}
+    filters = {}
     file_path_used = None
     error_messages = []
 
@@ -54,8 +129,9 @@ def load_emitters_data():
             file_path_used = "Uploaded file"
             st.sidebar.success("File successfully loaded!")
 
-            # Process the dataframe
-            emitters = process_dataframe(df)
+            # Process the dataframe for emitters and filters
+            emitters = process_emitter_dataframe(df)
+            filters = process_filter_dataframe(df)
 
         except Exception as e:
             error_messages.append(f"Error reading uploaded file: {str(e)}")
@@ -69,8 +145,9 @@ def load_emitters_data():
                     df = pl.read_parquet(path)
                     file_path_used = path
 
-                    # Process the dataframe
-                    emitters = process_dataframe(df)
+                    # Process the dataframe for emitters and filters
+                    emitters = process_emitter_dataframe(df)
+                    filters = process_filter_dataframe(df)
 
                     break
             except Exception as e:
@@ -79,7 +156,7 @@ def load_emitters_data():
     # If data loaded successfully
     if emitters:
         st.sidebar.success(f"Data successfully loaded from: {file_path_used}")
-        return emitters
+        return emitters, filters
 
     # If data could not be loaded, show error and details
     error_details = "\n".join(error_messages)
@@ -90,43 +167,56 @@ def load_emitters_data():
         st.markdown("**Try the following:**")
         st.markdown("""
         1. Make sure the file exists and has the correct extension (`.parquet`)
-        2. Check the project structure: file should be in `data/light_sources/light_sources.parquet`
+        2. Check the project structure: file should be in `data/light_sources.parquet`
         3. Upload the file directly through the upload interface in the sidebar
         4. Make sure the required packages are installed: `pip install polars pyarrow`
         """)
 
-    return {}
+    return {}, {}
 
-# Helper function to process dataframe with data
-def process_dataframe(df):
+# Helper function to process dataframe for emitter data
+def process_emitter_dataframe(df):
     """
-    Processes a DataFrame with spectrum data and extracts necessary columns
+    Processes a DataFrame and extracts emitter data
 
     Args:
         df (pl.DataFrame): DataFrame with spectrum data
 
     Returns:
-        dict: Dictionary with processed data
+        dict: Dictionary with processed emitter data
     """
     emitters = {}
 
     # Check if we need to group by company/device_id
     if "company" in df.columns and "device_id" in df.columns:
+        # Check if 'type' column exists
+        has_type_column = "type" in df.columns
+
         # Get unique combinations of company and device_id
-        unique_devices = df.select(["company", "device_id"]).unique()
+        if has_type_column:
+            unique_devices = df.select(["company", "device_id", "type"]).unique()
+        else:
+            unique_devices = df.select(["company", "device_id"]).unique()
 
         # Process each unique device
         for row in unique_devices.iter_rows(named=True):
             company = row["company"]
             device_id = row["device_id"]
 
+            # Get the type if available, otherwise set to "Unknown"
+            emitter_type = row["type"] if has_type_column else "Unknown"
+
             # Filter data for this specific device
-            data_df = df.filter(
+            filter_conditions = [
                 (pl.col("company") == company) &
                 (pl.col("device_id") == device_id)
+            ]
+
+            data_df = df.filter(
+                filter_conditions[0]
             )
 
-            # Find wavelength and intensity columns - use specific column names from the screenshot
+            # Find wavelength and intensity columns
             wavelength_col = "wave_nm" if "wave_nm" in data_df.columns else None
             intensity_col = "int_au" if "int_au" in data_df.columns else None
 
@@ -155,7 +245,8 @@ def process_dataframe(df):
                     emitter_name = f"{company} {device_id}"
                     emitters[emitter_name] = {
                         'wavelengths': clean_wavelengths.tolist(),
-                        'intensities': clean_intensities.tolist()
+                        'intensities': clean_intensities.tolist(),
+                        'type': emitter_type
                     }
     else:
         # Assume simple structure with wavelength and intensity columns
@@ -184,26 +275,109 @@ def process_dataframe(df):
             if len(clean_wavelengths) > 0 and len(clean_intensities) > 0:
                 emitters["Default Emitter"] = {
                     'wavelengths': clean_wavelengths.tolist(),
-                    'intensities': clean_intensities.tolist()
+                    'intensities': clean_intensities.tolist(),
+                    'type': "Unknown"
                 }
 
     return emitters
 
+# Helper function to process dataframe for filter data
+def process_filter_dataframe(df):
+    """
+    Processes a DataFrame and extracts filter data
+
+    Args:
+        df (pl.DataFrame): DataFrame with spectrum data
+
+    Returns:
+        dict: Dictionary with processed filter data
+    """
+    filters = {
+        "long_pass": {},
+        "short_pass": {},
+        "band_pass": {}
+    }
+
+    # Check if filter data exists in the DataFrame
+    # This function can be customized based on your specific file structure
+    # For demonstration, we'll try to find columns related to filters
+
+    # Method 1: If filters have their own rows with a type column
+    if "filter_type" in df.columns and "filter_name" in df.columns:
+        # Get all filter rows
+        filter_df = df.filter(pl.col("filter_type").is_not_null())
+
+        # Process each filter type
+        for filter_type in ["long_pass", "short_pass", "band_pass"]:
+            type_df = filter_df.filter(pl.col("filter_type") == filter_type)
+
+            for row in type_df.iter_rows(named=True):
+                filter_name = row["filter_name"]
+
+                # Find wavelength and transmission columns
+                wavelength_col = "wavelength" if "wavelength" in type_df.columns else "wave_nm"
+                transmission_col = "transmission" if "transmission" in type_df.columns else "trans"
+
+                if wavelength_col in type_df.columns and transmission_col in type_df.columns:
+                    filters[filter_type][filter_name] = {
+                        'wavelengths': row[wavelength_col],
+                        'transmission': row[transmission_col]
+                    }
+
+    # If no filter data found, create some demo filters
+    if all(len(filters[key]) == 0 for key in filters):
+        # Use the spectrum settings from config for demo filters
+        config = load_config()
+        min_wl = config["spectrum_settings"]["min_wavelength"]
+        max_wl = config["spectrum_settings"]["max_wavelength"]
+        step = config["spectrum_settings"]["step"]
+
+        wavelengths = np.arange(min_wl, max_wl, step)
+
+        # Create demo long pass filters (transmits longer wavelengths)
+        for cutoff in [450, 550, 650]:
+            transmission = 1 / (1 + np.exp(-(wavelengths - cutoff) / 5))
+            filters["long_pass"][f"LP{cutoff}"] = {
+                'wavelengths': wavelengths.tolist(),
+                'transmission': transmission.tolist()
+            }
+
+        # Create demo short pass filters (transmits shorter wavelengths)
+        for cutoff in [450, 550, 650]:
+            transmission = 1 / (1 + np.exp((wavelengths - cutoff) / 5))
+            filters["short_pass"][f"SP{cutoff}"] = {
+                'wavelengths': wavelengths.tolist(),
+                'transmission': transmission.tolist()
+            }
+
+        # Create demo band pass filters
+        for center in [450, 550, 650]:
+            for width in [20, 40, 60]:
+                transmission = np.exp(-0.5 * ((wavelengths - center) / (width/2))**(2*10))
+                filters["band_pass"][f"BP{center}±{width//2}"] = {
+                    'wavelengths': wavelengths.tolist(),
+                    'transmission': transmission.tolist()
+                }
+
+    return filters
+
 # Function to create a model filter spectrum
-def create_filter_spectrum(center, width, min_wavelength=350, max_wavelength=800, step=1):
+def create_filter_spectrum(center, width, config):
     """
     Creates a model bandpass filter spectrum
 
     Args:
         center (float): Central wavelength of the filter (nm)
         width (float): Bandwidth FWHM (nm)
-        min_wavelength (float): Minimum wavelength (nm)
-        max_wavelength (float): Maximum wavelength (nm)
-        step (float): Wavelength step (nm)
+        config (dict): Configuration dictionary
 
     Returns:
         pl.DataFrame: DataFrame with wavelengths and transmission coefficient
     """
+    min_wavelength = config["spectrum_settings"]["min_wavelength"]
+    max_wavelength = config["spectrum_settings"]["max_wavelength"]
+    step = config["spectrum_settings"]["step"]
+
     wavelengths = np.arange(min_wavelength, max_wavelength, step)
 
     # Create a bandpass filter using a super-gaussian function
@@ -267,111 +441,343 @@ def calculate_resulting_spectrum(emitter_data, filter_dfs):
 
     return result
 
-# Create sidebar for parameter input
-with st.sidebar:
-    st.header("Parameters")
+# Load emitter and filter data - This should be done only once if not already in session state
+if st.session_state.emitters_data is None or st.session_state.filters_data is None:
+    st.session_state.emitters_data, st.session_state.filters_data = load_data()
 
-# Load emitter data
-emitters_data = load_emitters_data()
-emitter_names = list(emitters_data.keys())
+emitters_data = st.session_state.emitters_data
+filters_data = st.session_state.filters_data
 
 # If no data loaded, show demo data
-if not emitter_names:
+if not emitters_data:
     st.warning("Using demonstration data, as the file could not be loaded. Upload a file through the sidebar to work with real data.")
 
     # Create demonstration data
     demo_wavelengths = np.arange(350, 800, 1)
 
-    # Create two demo emitters with different spectra
+    # Create demo emitters with different spectra
     demo_green = np.exp(-((demo_wavelengths - 550)**2) / (2 * 30**2))
     demo_blue = np.exp(-((demo_wavelengths - 470)**2) / (2 * 25**2))
+    demo_red = np.exp(-((demo_wavelengths - 630)**2) / (2 * 20**2))
 
     emitters_data = {
-        "Demo: Green (550nm)": {
+        "Demo: Green LED (550nm)": {
             'wavelengths': demo_wavelengths.tolist(),
-            'intensities': demo_green.tolist()
+            'intensities': demo_green.tolist(),
+            'type': "LED"
         },
-        "Demo: Blue (470nm)": {
+        "Demo: Blue Laser (470nm)": {
             'wavelengths': demo_wavelengths.tolist(),
-            'intensities': demo_blue.tolist()
+            'intensities': demo_blue.tolist(),
+            'type': "Laser"
+        },
+        "Demo: Red Lamp (630nm)": {
+            'wavelengths': demo_wavelengths.tolist(),
+            'intensities': demo_red.tolist(),
+            'type': "Lamp"
         }
     }
-    emitter_names = list(emitters_data.keys())
+    st.session_state.emitters_data = emitters_data
 
-# Continue sidebar setup
+    # If no filter data, create demo filters in the same format as process_filter_dataframe
+    if not filters_data:
+        st.session_state.filters_data = process_filter_dataframe(pl.DataFrame())
+        filters_data = st.session_state.filters_data
+
+# Get all available emitter types
+emitter_types = list(set(data['type'] for data in emitters_data.values()))
+emitter_types.sort()
+# Add "All" option at the beginning
+emitter_types = ["All"] + emitter_types
+
+# Create sidebar for parameter input
 with st.sidebar:
-    # Select emitter from loaded data
-    selected_emitter = st.selectbox("Emitter", emitter_names)
+    st.header("Parameters")
+
+    # Filter emitters by type
+    selected_type = st.selectbox(
+        "Filter by Emitter Type",
+        options=emitter_types,
+        index=0,
+        key="emitter_type_filter"
+    )
+
+    # Filter emitter list based on selected type
+    if selected_type == "All":
+        filtered_emitters = emitters_data
+    else:
+        filtered_emitters = {name: data for name, data in emitters_data.items()
+                             if data['type'] == selected_type}
+
+    # Get filtered emitter names
+    emitter_names = list(filtered_emitters.keys())
+
+    # If no emitters match the filter, display a warning
+    if not emitter_names:
+        st.warning(f"No emitters found with type: {selected_type}")
+        # Reset to "All" if no emitters match
+        selected_type = "All"
+        filtered_emitters = emitters_data
+        emitter_names = list(filtered_emitters.keys())
+
+    # Create the selectbox widget with a key and default index from session state
+    selected_emitter_index = st.selectbox(
+        "Emitter",
+        options=range(len(emitter_names)),
+        format_func=lambda i: emitter_names[i],
+        key="emitter_selector",
+        index=min(st.session_state.selected_emitter_index, len(emitter_names)-1)
+        if emitter_names else 0
+    )
+
+    # Save the selected index to session state for persistence
+    st.session_state.selected_emitter_index = selected_emitter_index
+
+    # Get the selected emitter name
+    selected_emitter = emitter_names[selected_emitter_index] if emitter_names else None
 
     # Section for adding filters
     st.subheader("Filters")
 
-    # Number of filters
-    num_filters = st.number_input("Number of filters", min_value=1, max_value=10, value=1)
+    # Filter type selection
+    filter_type_selection = st.radio(
+        "Filter Type",
+        ["Custom", "From Library"],
+        key="filter_type_selection"
+    )
 
-    # Create a list to store filter parameters
+    # Create a list to store filter parameters or selections
     filter_params = []
+    selected_filters = []
 
-    # Add input fields for each filter
-    for i in range(num_filters):
-        st.markdown(f"**Filter {i+1}**")
-        filter_center = st.number_input(f"Central wavelength (nm)",
-                                        min_value=350.0, max_value=800.0,
-                                        value=550.0, key=f"center_{i}")
-        filter_width = st.number_input(f"Width FWHM (nm)",
-                                       min_value=1.0, max_value=200.0,
-                                       value=40.0, key=f"width_{i}")
-        filter_params.append({
-            'center': filter_center,
-            'width': filter_width
-        })
+    if filter_type_selection == "Custom":
+        # Number of custom filters
+        num_filters = st.number_input("Number of filters", min_value=1, max_value=10, value=1, key="num_filters")
+
+        # Add input fields for each custom filter
+        for i in range(num_filters):
+            st.markdown(f"**Filter {i+1}**")
+
+            # Use config defaults
+            default_center = config["filter_defaults"]["center"]
+            default_width = config["filter_defaults"]["width"]
+            center_step = config["filter_defaults"]["center_step"]
+            width_step = config["filter_defaults"]["width_step"]
+
+            min_wl = config["spectrum_settings"]["min_wavelength"]
+            max_wl = config["spectrum_settings"]["max_wavelength"]
+
+            # Select filter type
+            filter_type = st.selectbox(
+                "Filter Type",
+                ["band_pass", "long_pass", "short_pass"],
+                key=f"custom_filter_{i}_type"
+            )
+
+            if filter_type == "band_pass":
+                filter_center = st.number_input(
+                    f"Central wavelength (nm)",
+                    min_value=float(min_wl),
+                    max_value=float(max_wl),
+                    value=float(default_center),
+                    step=float(center_step),
+                    key=f"filter_{i}_center"
+                )
+
+                filter_width = st.number_input(
+                    f"Width FWHM (nm)",
+                    min_value=1.0,
+                    max_value=float(max_wl - min_wl),
+                    value=float(default_width),
+                    step=float(width_step),
+                    key=f"filter_{i}_width"
+                )
+
+                filter_params.append({
+                    'type': filter_type,
+                    'center': filter_center,
+                    'width': filter_width
+                })
+            else:  # long_pass or short_pass
+                filter_cutoff = st.number_input(
+                    f"Cutoff wavelength (nm)",
+                    min_value=float(min_wl),
+                    max_value=float(max_wl),
+                    value=float(default_center),
+                    step=float(center_step),
+                    key=f"filter_{i}_cutoff"
+                )
+
+                filter_params.append({
+                    'type': filter_type,
+                    'cutoff': filter_cutoff
+                })
+    else:  # "From Library"
+        # Number of library filters
+        num_filters = st.number_input("Number of filters", min_value=1, max_value=5, value=1, key="num_lib_filters")
+
+        # Add selection fields for each library filter
+        for i in range(num_filters):
+            st.markdown(f"**Filter {i+1}**")
+
+            # Select filter type
+            filter_type = st.selectbox(
+                "Filter Type",
+                list(filters_data.keys()),
+                key=f"lib_filter_{i}_type"
+            )
+
+            # Get filter names for the selected type
+            filter_names = list(filters_data[filter_type].keys())
+
+            if filter_names:
+                # Select filter from the type
+                filter_name = st.selectbox(
+                    "Filter",
+                    filter_names,
+                    key=f"lib_filter_{i}_name"
+                )
+
+                selected_filters.append({
+                    'type': filter_type,
+                    'name': filter_name
+                })
+            else:
+                st.warning(f"No filters available for type: {filter_type}")
 
 # Get data for the selected emitter
-selected_emitter_data = emitters_data.get(selected_emitter)
+selected_emitter_data = filtered_emitters.get(selected_emitter) if selected_emitter else None
 
-# Create filter spectra based on the input parameters
+# Create filter spectra based on the input parameters or selections
 filter_spectra = []
-for params in filter_params:
-    filter_spectrum = create_filter_spectrum(params['center'], params['width'])
-    filter_spectra.append(filter_spectrum)
+
+if filter_type_selection == "Custom":
+    for params in filter_params:
+        if params['type'] == "band_pass":
+            # Create a bandpass filter
+            filter_spectrum = create_filter_spectrum(params['center'], params['width'], config)
+            filter_spectra.append(filter_spectrum)
+        elif params['type'] == "long_pass":
+            # Create a long pass filter (transmits longer wavelengths)
+            min_wl = config["spectrum_settings"]["min_wavelength"]
+            max_wl = config["spectrum_settings"]["max_wavelength"]
+            step = config["spectrum_settings"]["step"]
+
+            wavelengths = np.arange(min_wl, max_wl, step)
+            cutoff = params['cutoff']
+
+            # Create transmission curve (sigmoid function)
+            transmission = 1 / (1 + np.exp(-(wavelengths - cutoff) / 5))
+
+            filter_spectrum = pl.DataFrame({
+                'wavelength': wavelengths,
+                'transmission': transmission
+            })
+            filter_spectra.append(filter_spectrum)
+        elif params['type'] == "short_pass":
+            # Create a short pass filter (transmits shorter wavelengths)
+            min_wl = config["spectrum_settings"]["min_wavelength"]
+            max_wl = config["spectrum_settings"]["max_wavelength"]
+            step = config["spectrum_settings"]["step"]
+
+            wavelengths = np.arange(min_wl, max_wl, step)
+            cutoff = params['cutoff']
+
+            # Create transmission curve (inverse sigmoid function)
+            transmission = 1 / (1 + np.exp((wavelengths - cutoff) / 5))
+
+            filter_spectrum = pl.DataFrame({
+                'wavelength': wavelengths,
+                'transmission': transmission
+            })
+            filter_spectra.append(filter_spectrum)
+else:  # "From Library"
+    for filter_selection in selected_filters:
+        filter_type = filter_selection['type']
+        filter_name = filter_selection['name']
+
+        if filter_type in filters_data and filter_name in filters_data[filter_type]:
+            filter_data = filters_data[filter_type][filter_name]
+
+            filter_spectrum = pl.DataFrame({
+                'wavelength': filter_data['wavelengths'],
+                'transmission': filter_data['transmission']
+            })
+            filter_spectra.append(filter_spectrum)
 
 # Calculate the resulting spectrum
-resulting_spectrum = calculate_resulting_spectrum(selected_emitter_data, filter_spectra)
+resulting_spectrum = calculate_resulting_spectrum(selected_emitter_data, filter_spectra) if selected_emitter_data else None
 
 # Create containers for graphs
 col1, col2 = st.columns(2)
 
-# Emitter spectrum graph
+# Generate emitter spectrum figure only if it's not in session state or if emitter changed
+emitter_key = f"{selected_emitter}_graph" if selected_emitter else None
+if emitter_key and emitter_key not in st.session_state and selected_emitter_data:
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=selected_emitter_data['wavelengths'],
+        y=selected_emitter_data['intensities'],
+        mode='lines',
+        name='Emitter'
+    ))
+    fig.update_layout(
+        xaxis_title='Wavelength (nm)',
+        yaxis_title='Relative intensity',
+        height=400
+    )
+    st.session_state[emitter_key] = fig
+
+# Emitter spectrum graph - Using the cached figure to prevent re-rendering
 with col1:
-    st.subheader(f"Emitter spectrum: {selected_emitter}")
-    if selected_emitter_data:
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=selected_emitter_data['wavelengths'],
-            y=selected_emitter_data['intensities'],
-            mode='lines',
-            name='Emitter'
-        ))
-        fig.update_layout(
-            xaxis_title='Wavelength (nm)',
-            yaxis_title='Relative intensity',
-            height=400
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    if selected_emitter:
+        st.subheader(f"Emitter spectrum: {selected_emitter}")
+        emitter_type = selected_emitter_data.get('type', 'Unknown')
+        st.caption(f"Type: {emitter_type}")
+
+        if emitter_key in st.session_state:
+            # Use the cached figure
+            st.plotly_chart(st.session_state[emitter_key], use_container_width=True)
 
 # Filter spectra graph
 with col2:
     st.subheader("Filter spectra")
     if filter_spectra:
         fig = go.Figure()
-        for i, filter_spectrum in enumerate(filter_spectra):
-            params = filter_params[i]
-            fig.add_trace(go.Scatter(
-                x=filter_spectrum['wavelength'].to_numpy(),
-                y=filter_spectrum['transmission'].to_numpy(),
-                mode='lines',
-                name=f'Filter {i+1} ({params["center"]} nm, {params["width"]} nm)'
-            ))
+
+        if filter_type_selection == "Custom":
+            for i, filter_spectrum in enumerate(filter_spectra):
+                params = filter_params[i]
+                if params['type'] == "band_pass":
+                    filter_name = f"Band pass ({params['center']} nm, ±{params['width']/2} nm)"
+                elif params['type'] == "long_pass":
+                    filter_name = f"Long pass (cutoff {params['cutoff']} nm)"
+                elif params['type'] == "short_pass":
+                    filter_name = f"Short pass (cutoff {params['cutoff']} nm)"
+                else:
+                    filter_name = f"Filter {i+1}"
+
+                fig.add_trace(go.Scatter(
+                    x=filter_spectrum['wavelength'].to_numpy(),
+                    y=filter_spectrum['transmission'].to_numpy(),
+                    mode='lines',
+                    name=filter_name
+                ))
+        else:  # "From Library"
+            for i, filter_spectrum in enumerate(filter_spectra):
+                if i < len(selected_filters):
+                    filter_selection = selected_filters[i]
+                    filter_name = f"{filter_selection['type']} - {filter_selection['name']}"
+                else:
+                    filter_name = f"Filter {i+1}"
+
+                fig.add_trace(go.Scatter(
+                    x=filter_spectrum['wavelength'].to_numpy(),
+                    y=filter_spectrum['transmission'].to_numpy(),
+                    mode='lines',
+                    name=filter_name
+                ))
+
         fig.update_layout(
             xaxis_title='Wavelength (nm)',
             yaxis_title='Transmission coefficient',
@@ -462,7 +868,9 @@ with st.expander("Project information"):
 
     **Functionality:**
     - Display emitter spectrum from local data file
+    - Filter emitters by type (Lamp, Laser, LED)
     - Model filter spectra with specified parameters
+    - Select filters from a library of pre-defined filters
     - Calculate and display the resulting spectrum
     - Analyze characteristics of the resulting spectrum
 
@@ -471,14 +879,12 @@ with st.expander("Project information"):
     web_apps/
     ├── venv/
     ├── data/
-    │   └── light_sources/
-    │       ├── light_sources.ods
-    │       ├── light_sources.parquet
-    │       └── light_sources.xlsx
+    │   └── light_sources.parquet
     ├── manual_scripts/
     │   ├── ods_to_parquet.py
     │   ├── parquet_reader.py
     │   └── main.py
+    ├── config.toml
     └── README.md
     ```
     """)

@@ -1,0 +1,18 @@
+{
+"data_paths": {
+"parquet_files": [
+"data/light_sources.parquet"
+]
+},
+"spectrum_settings": {
+"min_wavelength": 350,
+"max_wavelength": 1000,
+"step": 1
+},
+"filter_defaults": {
+"center": 550.0,
+"center_step": 50.0,
+"width": 40.0,
+"width_step": 5.0
+}
+}

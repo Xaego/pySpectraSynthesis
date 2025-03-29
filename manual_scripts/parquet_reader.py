@@ -26,9 +26,9 @@ logger.debug(f"xlsx_path: {xlsx_path}")
 df = pd.read_parquet(parquet_path)
 logger.debug(df.head())
 
-# # Сохранение в ODS
-# # df.to_excel(ods_path, engine="odf", index=False)
-# df.to_excel(xlsx_path, index=False)
-#
-# end = time.time()
-# logger.success(f"Done in {end - start:.2f} seconds")
+# Сохранение в ODS
+# df.to_excel(ods_path, engine="odf", index=False)
+df.to_excel(xlsx_path, index=False)
+
+end = time.time()
+logger.success(f"Done in {end - start:.2f} seconds")

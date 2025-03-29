@@ -1,11 +1,10 @@
-import os
 from pathlib import Path
 import polars as pl
 from loguru import logger
 
 # project dir
 script_dir = Path(__file__).resolve().parent
-light_source_file = script_dir.parent / "data" / 'light_sources.ods'
+light_source_file = script_dir.parent / "data" / "light_sources.xlsx"
 
 logger.debug(f"light_source_file {light_source_file}")
 
