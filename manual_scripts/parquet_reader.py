@@ -1,3 +1,6 @@
+# task: open parquet and save as ods or excel.
+# compare save speed
+
 # 83 sec for ods, probably due archive structure of ods format
 # 7 sec xlsx
 
