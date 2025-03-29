@@ -40,34 +40,36 @@ def load_config():
     # Fallback default configuration
     return {
         "data_paths": {"parquet_files": ["data/light_sources.parquet"]},
-        "spectrum_settings": {"min_wavelength": 350, "max_wavelength": 1000, "step": 1},
+        "spectrum_settings": {"min_wavelength": 350, "max_wavelength": 1000, "step": 1, "filter_exponent": 10, "logistic_steepness": 5},
         "filter_defaults": {"center": 550.0, "center_step": 50.0, "width": 40.0, "width_step": 5.0},
         "detector_defaults": {"peak": 555.0, "sensitivity": 1.0},
+        "ui": {"default_emitters": []},
         "data_structure": {
             "emitters": {
                 "identifier_columns": ["company", "device_id"],
                 "type_column": "type",
-                "type_values": ["Lamp", "LED", "Laser"],
-                "wavelength_keywords": ["wave_nm", "wavelength"],
-                "intensity_keywords": ["int_au", "intensity"]
+                "type_values": ["Lamp", "LED", "Laser", "Laser Pumped Phosphor"],
+                "wavelength_keywords": ["wave_nm"],
+                "intensity_keywords": ["int_au"]
             },
             "filters": {
                 "identifier_columns": ["company", "device_id"],
                 "type_column": "type",
+                "wavelength_keywords": ["wave_nm"],
+                "transmission_keywords": ["int_au"],
                 "type_keywords": {
-                    "long_pass": ["long", "lp", "long pass"],
-                    "short_pass": ["short", "sp", "short pass"],
-                    "band_pass": ["band", "bp", "band pass"]
-                },
-                "wavelength_keywords": ["wave_nm", "wavelength"],
-                "transmission_keywords": ["int_au", "transmission"]
+                    "long_pass": ["long", "lp", "longpass", "long pass"],
+                    "short_pass": ["short", "sp", "shortpass", "short pass"],
+                    "band_pass": ["band", "bp", "bandpass", "band pass"],
+                    "safety_glasses": ["safety glasses"]
+                }
             },
             "detectors": {
                 "identifier_columns": ["company", "device_id"],
                 "type_column": "type",
-                "type_keywords": {"human_eye": ["eye", "si"]},
-                "wavelength_keywords": ["wave_nm", "wavelength"],
-                "sensitivity_keywords": ["int_au", "sensitivity"]
+                "wavelength_keywords": ["wave_nm"],
+                "sensitivity_keywords": ["int_au"],
+                "type_keywords": {"human_eye": ["eye"]}
             }
         }
     }
@@ -154,14 +156,16 @@ def process_filter_dataframe(df, config):
     Returns:
         dict: Processed filter data organized by filter category.
     """
-    filters_dict = {"long_pass": {}, "short_pass": {}, "band_pass": {}}
+    # Include safety_glasses in the filters dictionary
+    filters_dict = {"long_pass": {}, "short_pass": {}, "band_pass": {}, "safety_glasses": {}}
     filter_config = config.get("data_structure", {}).get("filters", {})
     identifier_columns = filter_config.get("identifier_columns", ["company", "device_id"])
     type_column = filter_config.get("type_column", "type")
     type_keywords = filter_config.get("type_keywords", {
         "long_pass": ["long", "lp", "long pass"],
         "short_pass": ["short", "sp", "short pass"],
-        "band_pass": ["band", "bp", "band pass"]
+        "band_pass": ["band", "bp", "band pass"],
+        "safety_glasses": ["safety glasses"]
     })
     wavelength_keywords = filter_config.get("wavelength_keywords", ["wave_nm", "wavelength"])
     transmission_keywords = filter_config.get("transmission_keywords", ["int_au", "transmission"])
@@ -328,6 +332,8 @@ def load_data():
                 error_messages.append(f"Error reading file {path}: {str(e)}")
     if df is not None:
         st.sidebar.success(f"Data successfully loaded from: {file_path_used}")
+        # Store the raw dataframe for viewer
+        st.session_state.raw_df = df
         emitters = process_emitter_dataframe(df, config)
         filters = process_filter_dataframe(df, config)
         detectors = process_detector_dataframe(df, config)
@@ -355,7 +361,23 @@ detectors_data = st.session_state.detectors_data
 # -----------------------------------------------------------------------------
 with st.sidebar:
     st.header("Parameters")
+
+    # Wavelength Range Controller
+    st.subheader("Wavelength Range")
+    min_wl = config["spectrum_settings"]["min_wavelength"]
+    max_wl = config["spectrum_settings"]["max_wavelength"]
+    wl_range = st.slider(
+        "Display Range (nm)",
+        min_value=int(min_wl),
+        max_value=int(max_wl),
+        value=(int(min_wl), int(max_wl)),
+        step=10,
+        key="wavelength_range"
+    )
+    display_min_wl, display_max_wl = wl_range
+
     # --- Emitter Selection with Multiselect ---
+    st.subheader("Emitter Selection")
     emitter_types = list(set(data['type'] for data in emitters_data.values())) if emitters_data else []
     emitter_types.sort()
     emitter_types = ["All"] + emitter_types
@@ -369,68 +391,120 @@ with st.sidebar:
         st.warning(f"No emitters found with type: {selected_type}")
         filtered_emitters = emitters_data
         emitter_names = list(filtered_emitters.keys())
-    # Multiselect for emitter names (default: all)
-    selected_emitters = st.multiselect("Select Emitters", options=emitter_names, default=emitter_names, key="emitter_selector")
+    # Use default emitters from config if available
+    default_emitters = config.get("ui", {}).get("default_emitters", emitter_names)
+    default_emitters = [e for e in default_emitters if e in emitter_names] or emitter_names
+    selected_emitters = st.multiselect("Select Emitters", options=emitter_names, default=default_emitters, key="emitter_selector")
 
     # --- Filter Selection ---
-    st.subheader("Filters")
-    has_library_filters = any(len(filters_data.get(ft, {})) > 0 for ft in ["long_pass", "short_pass", "band_pass"])
-    filter_options = ["Custom"] + (["From Library"] if has_library_filters else [])
-    filter_type_selection = st.radio("Filter Type", filter_options, key="filter_type_selection")
-    filter_params = []  # for custom filters
-    selected_filters = []  # for library filters
+    st.subheader("Filter Selection")
+    filter_type_selection = st.radio(
+        "Filter Type",
+        options=["Custom", "Library"],
+        key="filter_type"
+    )
+
+    # Custom Filter Parameters
+    filter_params = []
     if filter_type_selection == "Custom":
-        num_filters = st.number_input("Number of filters", min_value=0, max_value=10, value=1, key="num_filters")
+        # Default values from config
+        default_center = config["filter_defaults"]["center"]
+        center_step = config["filter_defaults"]["center_step"]
+        default_width = config["filter_defaults"]["width"]
+        width_step = config["filter_defaults"]["width_step"]
+
+        # Number of custom filters selector
+        num_filters = st.number_input("Number of Custom Filters", min_value=0, max_value=5, value=1, step=1)
+
         for i in range(num_filters):
-            st.markdown(f"**Filter {i+1}**")
-            default_center = config["filter_defaults"]["center"]
-            default_width = config["filter_defaults"]["width"]
-            center_step = config["filter_defaults"]["center_step"]
-            width_step = config["filter_defaults"]["width_step"]
-            min_wl = config["spectrum_settings"]["min_wavelength"]
-            max_wl = config["spectrum_settings"]["max_wavelength"]
-            ftype = st.selectbox("Filter Type", ["band_pass", "long_pass", "short_pass"], key=f"custom_filter_{i}_type")
-            if ftype == "band_pass":
-                filter_center = st.number_input("Central wavelength (nm)", min_value=float(min_wl), max_value=float(max_wl),
-                                                value=float(default_center), step=float(center_step), key=f"filter_{i}_center")
-                filter_width = st.number_input("Width FWHM (nm)", min_value=1.0, max_value=float(max_wl - min_wl),
-                                               value=float(default_width), step=float(width_step), key=f"filter_{i}_width")
-                filter_params.append({'type': ftype, 'center': filter_center, 'width': filter_width})
-            else:
-                filter_cutoff = st.number_input("Cutoff wavelength (nm)", min_value=float(min_wl), max_value=float(max_wl),
-                                                value=float(default_center), step=float(center_step), key=f"filter_{i}_cutoff")
-                filter_params.append({'type': ftype, 'cutoff': filter_cutoff})
-    else:  # "From Library"
-        num_filters = st.number_input("Number of filters", min_value=0, max_value=5, value=1, key="num_lib_filters")
-        for i in range(num_filters):
-            st.markdown(f"**Filter {i+1}**")
-            available_filter_types = [ft for ft in ["long_pass", "short_pass", "band_pass"]
-                                      if len(filters_data.get(ft, {})) > 0]
-            ftype = st.selectbox("Filter Type", available_filter_types, key=f"lib_filter_{i}_type") if available_filter_types else None
-            if ftype:
-                filter_names = list(filters_data[ftype].keys())
-                if filter_names:
-                    fname = st.selectbox("Filter", filter_names, key=f"lib_filter_{i}_name")
-                    selected_filters.append({'type': ftype, 'name': fname})
-                else:
-                    st.warning(f"No filters available for type: {ftype}")
+            with st.expander(f"Filter {i+1}"):
+                filter_type = st.selectbox(
+                    "Filter Type",
+                    options=["band_pass", "long_pass", "short_pass"],
+                    key=f"filter_type_{i}"
+                )
+
+                if filter_type == "band_pass":
+                    center = st.slider(
+                        "Center Wavelength (nm)",
+                        max_value=float(max_wl),
+                        value=float(default_center),
+                        step=float(center_step),
+                        key=f"center_{i}"
+                    )
+                    width = st.slider(
+                        "Width (nm)",
+                        min_value=10.0,
+                        max_value=200.0,
+                        value=default_width,
+                        step=width_step,
+                        key=f"width_{i}"
+                    )
+                    filter_params.append({
+                        'type': filter_type,
+                        'center': center,
+                        'width': width
+                    })
+                elif filter_type in ["long_pass", "short_pass"]:
+                    cutoff = st.slider(
+                        "Cutoff Wavelength (nm)",
+                        min_value=min_wl,
+                        max_value=max_wl,
+                        value=default_center,
+                        step=center_step,
+                        key=f"cutoff_{i}"
+                    )
+                    filter_params.append({
+                        'type': filter_type,
+                        'cutoff': cutoff
+                    })
+
+    # Library Filter Selection
+    selected_filters = []
+    if filter_type_selection == "Library":
+        # Create a list of all available filters with their categories
+        filter_options = []
+        for category, filters in filters_data.items():
+            for filter_name in filters.keys():
+                filter_options.append({
+                    'type': category,
+                    'name': filter_name,
+                    'display': f"{category} - {filter_name}"
+                })
+
+        # Allow selecting multiple filters from the library
+        if filter_options:
+            display_options = [f["display"] for f in filter_options]
+            selected_displays = st.multiselect(
+                "Select Filters from Library",
+                options=display_options,
+                key="lib_filter_selector"
+            )
+
+            # Map selected display options back to the filter data
+            for display in selected_displays:
+                for filter_option in filter_options:
+                    if filter_option["display"] == display:
+                        selected_filters.append(filter_option)
+                        break
+        else:
+            st.warning("No filters available in the library.")
+
     # --- Detector Selection ---
-    st.subheader("Detector")
-    detector_enabled = st.checkbox("Enable Detector", value=False, key="detector_enabled")
+    st.subheader("Detector Selection")
+    detector_enabled = st.checkbox("Enable Detector", value=False)
+
     selected_detector = None
     if detector_enabled:
-        if not detectors_data:
-            st.warning("No detector data found in the file. Please upload a file with detector data.")
+        detector_names = list(detectors_data.keys())
+        if detector_names:
+            selected_detector = st.selectbox(
+                "Select Detector",
+                options=detector_names,
+                key="detector_selector"
+            )
         else:
-            detector_names = list(detectors_data.keys())
-            if detector_names:
-                selected_detector_name = st.selectbox("Select Detector", detector_names, key="selected_detector")
-                if selected_detector_name in detectors_data:
-                    detector_type = detectors_data[selected_detector_name].get('type', 'Unknown')
-                    st.info(f"Detector type: {detector_type}")
-                selected_detector = selected_detector_name
-            else:
-                st.warning("No detectors available in the data.")
+            st.warning("No detectors available in the data.")
 
 # -----------------------------------------------------------------------------
 # SPECTRUM CREATION & RESULT CALCULATION
@@ -449,68 +523,98 @@ def create_filter_spectrum(center, width, config):
     max_wl = config["spectrum_settings"]["max_wavelength"]
     step = config["spectrum_settings"]["step"]
     wavelengths = np.arange(min_wl, max_wl, step)
-    n = 10  # Super-Gaussian exponent for sharper edges
+    # Use configurable exponent for super-gaussian function (default=10)
+    n = config.get("spectrum_settings", {}).get("filter_exponent", 10)
     transmission = np.exp(-0.5 * ((wavelengths - center) / (width/2))**(2*n))
     return pl.DataFrame({'wavelength': wavelengths, 'transmission': transmission})
 
-def calculate_resulting_spectrum(emitter_data, filter_dfs, detector_df=None):
+def calculate_resulting_spectrum(emitter_data, filter_dfs, detector_df=None, from_library=None):
     """
     Calculates the resulting spectrum by applying filter transmissions and, if enabled, detector response.
     Args:
         emitter_data (dict): Emitter spectrum data.
         filter_dfs (list): List of filter DataFrames.
         detector_df (pl.DataFrame, optional): Detector response DataFrame.
+        from_library (list, optional): List of booleans indicating if each filter is from library (in OD) or custom (in transmission).
     Returns:
         pl.DataFrame: Resulting spectrum.
     """
     if not emitter_data or len(filter_dfs) == 0:
         return None
+
+    # If from_library is not provided, assume all filters are in transmission format
+    if from_library is None:
+        from_library = [False] * len(filter_dfs)
+
     emitter_df = pl.DataFrame({'wavelength': emitter_data['wavelengths'], 'intensity': emitter_data['intensities']})
     wavelengths = emitter_df['wavelength'].to_numpy()
     intensities = emitter_df['intensity'].to_numpy()
     resulting_intensities = intensities.copy()
-    for filter_df in filter_dfs:
+
+    for i, filter_df in enumerate(filter_dfs):
         if filter_df is not None:
             filter_wavelengths = filter_df['wavelength'].to_numpy()
-            filter_transmissions = filter_df['transmission'].to_numpy()
-            interp_transmission = np.interp(wavelengths, filter_wavelengths, filter_transmissions, left=0, right=0)
+            filter_values = filter_df['transmission'].to_numpy()
+
+            # If filter is from library, it's in optical density format and needs conversion to transmission
+            # If it's a custom filter, it's already in transmission format (0-1)
+            is_library = from_library[i] if i < len(from_library) else False
+
+            if is_library:
+                # Convert optical density to transmission: T = 10^(-OD)
+                # Ensure we handle very high OD values gracefully by clipping
+                # OD > 10 would mean T < 1e-10, which is effectively zero transmission
+                filter_values = np.where(filter_values > 10, 0, 10 ** (-filter_values))
+
+            interp_transmission = np.interp(wavelengths, filter_wavelengths, filter_values, left=0, right=0)
             resulting_intensities *= interp_transmission
+
     detector_weighted = None
     if detector_df is not None:
         detector_wavelengths = detector_df['wavelength'].to_numpy()
         detector_sensitivities = detector_df['sensitivity'].to_numpy()
         interp_sensitivity = np.interp(wavelengths, detector_wavelengths, detector_sensitivities, left=0, right=0)
         detector_weighted = resulting_intensities * interp_sensitivity
+
     result_dict = {'wavelength': wavelengths, 'intensity': intensities, 'resulting_intensity': resulting_intensities}
     if detector_weighted is not None:
         result_dict['detector_weighted'] = detector_weighted
+
     return pl.DataFrame(result_dict)
 
 # Create filter spectra from user selections
 filter_spectra = []
+from_library = []  # Track which filters are from library (and in OD format)
+
 if filter_type_selection == "Custom":
     for params in filter_params:
         if params['type'] == "band_pass":
             fs = create_filter_spectrum(params['center'], params['width'], config)
             filter_spectra.append(fs)
+            from_library.append(False)  # Custom filters are in transmission format
         elif params['type'] == "long_pass":
             min_wl = config["spectrum_settings"]["min_wavelength"]
             max_wl = config["spectrum_settings"]["max_wavelength"]
             step = config["spectrum_settings"]["step"]
             wavelengths = np.arange(min_wl, max_wl, step)
             cutoff = params['cutoff']
-            transmission = 1 / (1 + np.exp(-(wavelengths - cutoff) / 5))
+            # Use configurable logistic steepness (default=5)
+            steepness = config.get("spectrum_settings", {}).get("logistic_steepness", 5)
+            transmission = 1 / (1 + np.exp(-(wavelengths - cutoff) / steepness))
             fs = pl.DataFrame({'wavelength': wavelengths, 'transmission': transmission})
             filter_spectra.append(fs)
+            from_library.append(False)  # Custom filters are in transmission format
         elif params['type'] == "short_pass":
             min_wl = config["spectrum_settings"]["min_wavelength"]
             max_wl = config["spectrum_settings"]["max_wavelength"]
             step = config["spectrum_settings"]["step"]
             wavelengths = np.arange(min_wl, max_wl, step)
             cutoff = params['cutoff']
-            transmission = 1 / (1 + np.exp((wavelengths - cutoff) / 5))
+            steepness = config.get("spectrum_settings", {}).get("logistic_steepness", 5)
+            transmission = 1 / (1 + np.exp((wavelengths - cutoff) / steepness))
             fs = pl.DataFrame({'wavelength': wavelengths, 'transmission': transmission})
             filter_spectra.append(fs)
+            from_library.append(False)  # Custom filters are in transmission format
 else:
     for selection in selected_filters:
         ftype = selection['type']
@@ -519,6 +623,7 @@ else:
             fdata = filters_data[ftype][fname]
             fs = pl.DataFrame({'wavelength': fdata['wavelengths'], 'transmission': fdata['transmission']})
             filter_spectra.append(fs)
+            from_library.append(True)  # Library filters are in optical density format
 
 detector_df = None
 if detector_enabled and selected_detector and selected_detector in detectors_data:
@@ -542,12 +647,20 @@ with col1:
                 mode='lines',
                 name=name
             ))
-        fig_em.update_layout(xaxis_title='Wavelength (nm)', yaxis_title='Intensity', height=400)
+        # Apply the wavelength range from the sidebar
+        fig_em.update_layout(
+            xaxis_title='Wavelength (nm)',
+            yaxis_title='Intensity',
+            height=400,
+            xaxis=dict(range=[display_min_wl, display_max_wl])
+        )
         st.plotly_chart(fig_em, use_container_width=True)
+
 with col2:
     st.subheader("Filter & Detector Spectra")
     if filter_spectra or detector_df is not None:
         fig_fd = go.Figure()
+        # Plot filter traces on primary y-axis (as Optical Density)
         if filter_type_selection == "Custom":
             for i, fs in enumerate(filter_spectra):
                 params = filter_params[i]
@@ -559,9 +672,12 @@ with col2:
                     label = f"Short pass (cutoff {params['cutoff']} nm)"
                 else:
                     label = f"Filter {i+1}"
+                # Convert transmission to Optical Density: OD = -log10(T)
+                transmission = fs['transmission'].to_numpy()
+                optical_density = np.where(transmission > 0, -np.log10(transmission), np.nan)
                 fig_fd.add_trace(go.Scatter(
                     x=fs['wavelength'].to_numpy(),
-                    y=fs['transmission'].to_numpy(),
+                    y=optical_density,
                     mode='lines',
                     name=label
                 ))
@@ -572,34 +688,44 @@ with col2:
                     label = f"{sel['type']} - {sel['name']}"
                 else:
                     label = f"Filter {i+1}"
+                # Assume library filter data is already in Optical Density
                 fig_fd.add_trace(go.Scatter(
                     x=fs['wavelength'].to_numpy(),
                     y=fs['transmission'].to_numpy(),
                     mode='lines',
                     name=label
                 ))
+        # Plot detector trace on secondary y-axis (Detector Sensitivity)
         if detector_df is not None:
             fig_fd.add_trace(go.Scatter(
                 x=detector_df['wavelength'].to_numpy(),
                 y=detector_df['sensitivity'].to_numpy(),
                 mode='lines',
                 name=selected_detector,
-                line=dict(dash='dash')
+                line=dict(dash='dash'),
+                yaxis="y2"
             ))
-        fig_fd.update_layout(xaxis_title='Wavelength (nm)', yaxis_title='Transmission / Sensitivity', height=400)
+        # Apply the wavelength range from the sidebar
+        fig_fd.update_layout(
+            xaxis_title='Wavelength (nm)',
+            yaxis=dict(title='Optical Density'),
+            yaxis2=dict(title='Detector Sensitivity', overlaying='y', side='right'),
+            height=400,
+            xaxis=dict(range=[display_min_wl, display_max_wl])
+        )
         st.plotly_chart(fig_fd, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# RESULTING SPECTRUM: Отдельные спектры для каждого эмиттера
+# RESULTING SPECTRUM: Individual spectra for each emitter
 # -----------------------------------------------------------------------------
 if selected_emitters:
     st.subheader("Resulting Spectrum")
     fig_res = go.Figure()
     for name in selected_emitters:
         emitter_data = filtered_emitters[name]
-        # Вычисляем результирующий спектр для каждого эмиттера отдельно
-        rs = calculate_resulting_spectrum(emitter_data, filter_spectra, detector_df)
-        # Оригинальный спектр – пунктир
+        # Calculate resulting spectrum for each emitter separately
+        rs = calculate_resulting_spectrum(emitter_data, filter_spectra, detector_df, from_library)
+        # Original spectrum - dashed line
         fig_res.add_trace(go.Scatter(
             x=emitter_data['wavelengths'],
             y=emitter_data['intensities'],
@@ -607,7 +733,7 @@ if selected_emitters:
             name=f"{name} Original",
             line=dict(dash='dash')
         ))
-        # Финальный (отфильтрованный) спектр – сплошная линия
+        # Final (filtered) spectrum - solid line
         if rs is not None:
             fig_res.add_trace(go.Scatter(
                 x=rs['wavelength'].to_numpy(),
@@ -616,7 +742,7 @@ if selected_emitters:
                 name=f"{name} Filtered",
                 line=dict(dash='solid')
             ))
-            # Если включён детектор, добавляем его отклик (например, dashdot)
+            # If detector is enabled, add its response (dashdot)
             if 'detector_weighted' in rs.columns:
                 fig_res.add_trace(go.Scatter(
                     x=rs['wavelength'].to_numpy(),
@@ -625,7 +751,13 @@ if selected_emitters:
                     name=f"{name} Detector Response",
                     line=dict(dash='dashdot')
                 ))
-    fig_res.update_layout(xaxis_title='Wavelength (nm)', yaxis_title='Intensity', height=500)
+    # Apply the wavelength range from the sidebar
+    fig_res.update_layout(
+        xaxis_title='Wavelength (nm)',
+        yaxis_title='Intensity',
+        height=500,
+        xaxis=dict(range=[display_min_wl, display_max_wl])
+    )
     st.plotly_chart(fig_res, use_container_width=True)
 else:
     st.info("Please select at least one emitter and one filter to display the resulting spectrum.")
@@ -634,10 +766,10 @@ else:
 # STATISTICS
 # -----------------------------------------------------------------------------
 with st.expander("Resulting Spectrum Statistics"):
-    # Вычисляем статистику для каждого эмиттера отдельно
+    # Calculate statistics for each emitter separately
     for name in selected_emitters:
         emitter_data = filtered_emitters[name]
-        rs = calculate_resulting_spectrum(emitter_data, filter_spectra, detector_df)
+        rs = calculate_resulting_spectrum(emitter_data, filter_spectra, detector_df, from_library)
         if rs is not None:
             wavelengths = rs['wavelength'].to_numpy()
             result_intensities = rs['resulting_intensity'].to_numpy()
@@ -647,7 +779,7 @@ with st.expander("Resulting Spectrum Statistics"):
             half_max = peak_intensity / 2
             above_half = wavelengths[result_intensities >= half_max]
             fwhm = (above_half.max() - above_half.min()) if above_half.size > 1 else "N/A"
-            # Используем np.trapezoid вместо np.trapz
+            # Use np.trapezoid instead of np.trapz
             integral = np.trapezoid(result_intensities, wavelengths)
             original_integral = np.trapezoid(np.array(emitter_data['intensities']), np.array(emitter_data['wavelengths']))
             rel_intensity = (integral / original_integral) * 100 if original_integral else 0
@@ -678,3 +810,12 @@ with st.expander("Project Information"):
     └── main.py
     ```
     """)
+
+# -----------------------------------------------------------------------------
+# PARQUET FILE VIEWER
+# -----------------------------------------------------------------------------
+with st.expander("Parquet File Viewer"):
+    if "raw_df" in st.session_state and st.session_state.raw_df is not None:
+        st.dataframe(st.session_state.raw_df.head(100))
+    else:
+        st.write("No parquet data available.")

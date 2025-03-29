@@ -1,54 +1,48 @@
-{
-"data_paths": {
-"parquet_files": [
-"data/light_sources.parquet"
-]
-},
-"spectrum_settings": {
-"min_wavelength": 350,
-"max_wavelength": 1000,
-"step": 1
-},
-"filter_defaults": {
-"center": 550.0,
-"center_step": 50.0,
-"width": 40.0,
-"width_step": 5.0
-},
-"detector_defaults": {
-"peak": 555.0,
-"sensitivity": 1.0
-},
-"data_structure": {
+[data_paths]
+parquet_files = ["data/light_sources.parquet"]
 
-"emitters": {
-"identifier_columns": ["company", "device_id"],
-"type_column": "type",
-"type_values": ["Lamp", "LED", "Laser", "Laser Pumped Phosphor"],
-"wavelength_keywords": ["wave_nm"],
-"intensity_keywords": ["int_au"]
-},
+[spectrum_settings]
+min_wavelength = 350
+max_wavelength = 1000
+step = 1
 
-"filters": {
-"identifier_columns": ["company", "device_id"],
-"type_column": "type",
-"type_keywords": {
-"long_pass": ["long", "lp", "long pass", "long pass"],
-"short_pass": ["short", "sp", "short pass", "short pass"],
-"band_pass": ["band", "bp", "band pass", "band pass"]
-},
-"wavelength_keywords": ["wave_nm"],
-"transmission_keywords": ["int_au"]
-},
+[filter_defaults]
+center = 550.0
+center_step = 50.0
+width = 40.0
+width_step = 5.0
 
-"detectors": {
-"identifier_columns": ["company", "device_id"],
-"type_column": "type",
-"type_keywords": {
-"human_eye": ["eye", "si",]
-},
-"wavelength_keywords": ["wave_nm"],
-"sensitivity_keywords": ["int_au"]
-}
-}
-}
+[detector_defaults]
+peak = 555.0
+sensitivity = 1.0
+
+[ui]
+default_emitters = ["Thorlabs SLS701"]
+
+[data_structure.emitters]
+identifier_columns = ["company", "device_id"]
+type_column = "type"
+type_values = ["Lamp", "LED", "Laser", "Laser_Pumped_Phosphor"]
+wavelength_keywords = ["wave_nm"]
+intensity_keywords = ["int_au"]
+
+[data_structure.filters]
+identifier_columns = ["company", "device_id"]
+type_column = "type"
+wavelength_keywords = ["wave_nm"]
+transmission_keywords = ["int_au"]
+
+[data_structure.filters.type_keywords]
+long_pass = ["long", "lp", "longpass", "long pass"]
+short_pass = ["short", "sp", "shortpass", "short pass"]
+band_pass = ["band", "bp", "bandpass", "band pass"]
+safety_glasses = ["safety_glasses"]
+
+[data_structure.detectors]
+identifier_columns = ["company", "device_id"]
+type_column = "type"
+wavelength_keywords = ["wave_nm"]
+sensitivity_keywords = ["int_au"]
+
+[data_structure.detectors.type_keywords]
+human_eye = ["eye"]
