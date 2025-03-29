@@ -14,5 +14,41 @@
 "center_step": 50.0,
 "width": 40.0,
 "width_step": 5.0
+},
+"detector_defaults": {
+"peak": 555.0,
+"sensitivity": 1.0
+},
+"data_structure": {
+
+"emitters": {
+"identifier_columns": ["company", "device_id"],
+"type_column": "type",
+"type_values": ["Lamp", "LED", "Laser", "Laser Pumped Phosphor"],
+"wavelength_keywords": ["wave_nm"],
+"intensity_keywords": ["int_au"]
+},
+
+"filters": {
+"identifier_columns": ["company", "device_id"],
+"type_column": "type",
+"type_keywords": {
+"long_pass": ["long", "lp", "long pass", "long pass"],
+"short_pass": ["short", "sp", "short pass", "short pass"],
+"band_pass": ["band", "bp", "band pass", "band pass"]
+},
+"wavelength_keywords": ["wave_nm"],
+"transmission_keywords": ["int_au"]
+},
+
+"detectors": {
+"identifier_columns": ["company", "device_id"],
+"type_column": "type",
+"type_keywords": {
+"human_eye": ["eye", "si",]
+},
+"wavelength_keywords": ["wave_nm"],
+"sensitivity_keywords": ["int_au"]
+}
 }
 }

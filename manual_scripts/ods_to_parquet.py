@@ -15,7 +15,11 @@ logger.debug(f"df.shape {df.shape}")
 
 # save to parquet
 parquet_path = light_source_file.with_suffix('.parquet')
-df.write_parquet(light_source_file)
+
+if df.is_empty():
+    logger.warning("DataFrame is empty, nothing to save.")
+else:
+    df.write_parquet(parquet_path)
 
 logger.success(f"saved: parquet file {parquet_path}")
 logger.success(f"done")
