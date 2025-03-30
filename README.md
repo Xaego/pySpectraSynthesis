@@ -1,7 +1,7 @@
 # Spectrum Analyzer
 
 A Streamlit web application for analyzing optical spectra of emitters, filters, and detectors.
-
+![main_view.png](docs/main_view.png)
 ## Features
 
 - Visualize and analyze various light emitter spectra (LEDs, Lamps, Lasers)
