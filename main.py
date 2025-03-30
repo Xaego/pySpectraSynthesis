@@ -13,66 +13,32 @@ def load_config():
     """
     Loads configuration from config.json or config.toml.
     Returns:
-        dict: Configuration dictionary.
+        dict: The configuration dictionary loaded from a file.
+    Raises:
+        FileNotFoundError: If no configuration file is found.
     """
+    import os, json
     script_dir = os.path.dirname(os.path.abspath(__file__))
     config_paths = [
         os.path.join(script_dir, "config.json"),
         os.path.join(script_dir, "config.toml"),
         os.path.join(os.getcwd(), "config.json"),
-        os.path.join(os.getcwd(), "config.toml"),
-        "config.json",
-        "config.toml"
+        os.path.join(os.getcwd(), "config.toml")
     ]
     for path in config_paths:
-        try:
-            if os.path.exists(path):
+        if os.path.exists(path):
+            try:
                 with open(path, 'r') as f:
                     try:
-                        config = json.load(f)
+                        return json.load(f)
                     except json.JSONDecodeError:
                         import toml  # Assumes toml is installed
                         f.seek(0)
-                        config = toml.load(f)
-                return config
-        except Exception:
-            continue
-    # Fallback default configuration
-    return {
-        "data_paths": {"parquet_files": ["data/light_sources.parquet"]},
-        "spectrum_settings": {"min_wavelength": 350, "max_wavelength": 1000, "step": 1, "filter_exponent": 10, "logistic_steepness": 5},
-        "filter_defaults": {"center": 550.0, "center_step": 50.0, "width": 40.0, "width_step": 5.0},
-        "detector_defaults": {"peak": 555.0, "sensitivity": 1.0},
-        "ui": {"default_emitters": []},
-        "data_structure": {
-            "emitters": {
-                "identifier_columns": ["company", "device_id"],
-                "type_column": "type",
-                "type_values": ["Lamp", "LED", "Laser", "Laser Pumped Phosphor"],
-                "wavelength_keywords": ["wave_nm"],
-                "intensity_keywords": ["int_au"]
-            },
-            "filters": {
-                "identifier_columns": ["company", "device_id"],
-                "type_column": "type",
-                "wavelength_keywords": ["wave_nm"],
-                "transmission_keywords": ["int_au"],
-                "type_keywords": {
-                    "long_pass": ["long", "lp", "longpass", "long pass"],
-                    "short_pass": ["short", "sp", "shortpass", "short pass"],
-                    "band_pass": ["band", "bp", "bandpass", "band pass"],
-                    "safety_glasses": ["safety glasses"]
-                }
-            },
-            "detectors": {
-                "identifier_columns": ["company", "device_id"],
-                "type_column": "type",
-                "wavelength_keywords": ["wave_nm"],
-                "sensitivity_keywords": ["int_au"],
-                "type_keywords": {"human_eye": ["eye"]}
-            }
-        }
-    }
+                        return toml.load(f)
+            except Exception as e:
+                st.error(f"Error reading config file {path}: {e}")
+                raise e
+    raise FileNotFoundError("Configuration file not found. Please provide config.json or config.toml.")
 
 # -----------------------------------------------------------------------------
 # HELPER FUNCTIONS
@@ -448,10 +414,10 @@ with st.sidebar:
                 elif filter_type in ["long_pass", "short_pass"]:
                     cutoff = st.slider(
                         "Cutoff Wavelength (nm)",
-                        min_value=min_wl,
-                        max_value=max_wl,
-                        value=default_center,
-                        step=center_step,
+                        min_value=int(min_wl),
+                        max_value=int(max_wl),
+                        value=int(default_center),
+                        step=int(center_step),
                         key=f"cutoff_{i}"
                     )
                     filter_params.append({

@@ -4,7 +4,7 @@ from loguru import logger
 
 # project dir
 script_dir = Path(__file__).resolve().parent
-light_source_file = script_dir.parent / "data" / "light_sources.xlsx"
+light_source_file = script_dir.parent / "data" / "devices.xlsx"
 
 logger.debug(f"light_source_file {light_source_file}")
 

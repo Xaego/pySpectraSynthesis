@@ -18,7 +18,7 @@ logger.debug(f"project_root: {project_root}")
 # Пути к файлам
 parquet_path = project_root / "data" / "light_sources.parquet"
 ods_path = project_root / "data" / "light_sources.ods"
-xlsx_path = project_root / "data" / "light_sources.xlsx"
+xlsx_path = project_root / "data" / "devices.xlsx"
 logger.debug(f"ods_path: {parquet_path}")
 logger.debug(f"xlsx_path: {xlsx_path}")
 
