@@ -271,9 +271,6 @@ def load_data():
             os.path.join(script_dir, "..", path),
             os.path.join(os.getcwd(), path)
         ])
-    possible_paths.append(os.path.join(script_dir, "data", "light_sources.parquet"))
-    possible_paths.append(os.path.join(os.getcwd(), "data", "light_sources.parquet"))
-    possible_paths.append("data/light_sources.parquet")
 
     uploaded_file = st.sidebar.file_uploader("Or upload a file with emitter data", type=["parquet"])
     df = None
@@ -771,7 +768,7 @@ with st.expander("Project Information"):
     ```
     web_apps/
     ├── data/
-    │   └── light_sources.parquet
+    │   └── devices.parquet
     ├── config.toml
     └── main.py
     ```
