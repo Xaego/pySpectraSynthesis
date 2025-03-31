@@ -253,7 +253,8 @@ if 'filters_data' not in st.session_state:
 if 'detectors_data' not in st.session_state:
     st.session_state.detectors_data = None
 
-st.title("Emitter, Filter, and Detector Spectrum Analyzer")
+st.title("software under development \n"
+         "Emitter, Filter, and Detector Spectrum Analyzer")
 config = load_config()
 
 def load_data():
