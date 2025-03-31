@@ -45,4 +45,4 @@ wavelength_keywords = ["wave_nm"]
 sensitivity_keywords = ["int_au"]
 
 [data_structure.detectors.type_keywords]
-human_eye = ["si", "ge", "MCT HgCdTe", "uv si", "eye"]
+type = ["si", "ge", "MCT_HgCdTe", "uv_si", "eye"]

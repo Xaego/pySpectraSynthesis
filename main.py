@@ -4,7 +4,6 @@ import numpy as np
 import plotly.graph_objects as go
 import os
 import io
-import json
 
 # -----------------------------------------------------------------------------
 # CONFIGURATION LOADING
@@ -188,12 +187,24 @@ def process_detector_dataframe(df, config):
         dict: Processed detector data.
     """
     detectors = {}
-    detector_config = config.get("data_structure", {}).get("detectors", {})
-    identifier_columns = detector_config.get("identifier_columns", ["company", "device_id"])
-    type_column = detector_config.get("type_column", "type")
-    type_keywords = detector_config.get("type_keywords", {"human_eye": ["eye", "si"]})
-    wavelength_keywords = detector_config.get("wavelength_keywords", ["wave_nm", "wavelength"])
-    sensitivity_keywords = detector_config.get("sensitivity_keywords", ["int_au", "sensitivity"])
+    detector_config = config.get("data_structure", {}).get("detectors", None)
+    if detector_config is None:
+        st.error("Missing 'data_structure.detectors' section in config.")
+        return detectors
+
+    required_keys = ["identifier_columns", "type_column", "wavelength_keywords", "sensitivity_keywords"]
+    for key in required_keys:
+        if key not in detector_config:
+            st.error(f"Missing key '{key}' in 'data_structure.detectors' config.")
+            return detectors
+
+    identifier_columns = detector_config["identifier_columns"]
+    type_column = detector_config["type_column"]
+    wavelength_keywords = detector_config["wavelength_keywords"]
+    sensitivity_keywords = detector_config["sensitivity_keywords"]
+
+    type_list = config.get("data_structure", {}).get("detectors", {}).get("type_keywords", {}).get("type", [])
+    type_list = [t.lower() for t in type_list]
 
     if not all(col in df.columns for col in identifier_columns + [type_column]):
         st.error("Detector identifiers or type column missing in data.")
@@ -208,12 +219,7 @@ def process_detector_dataframe(df, config):
     unique_rows = df.select(identifier_columns + [type_column]).unique()
     for row in unique_rows.iter_rows(named=True):
         type_val = str(row.get(type_column, "")).lower()
-        detector_category = None
-        for category, keywords in type_keywords.items():
-            if any(keyword.lower() in type_val for keyword in keywords):
-                detector_category = category
-                break
-        if detector_category is None:
+        if type_val not in type_list:
             continue
 
         detector_name = " ".join(str(row[col]) for col in identifier_columns)
@@ -232,12 +238,14 @@ def process_detector_dataframe(df, config):
         else:
             wavelengths = detector_rows[wavelength_col].to_numpy().tolist()
             sensitivities = detector_rows[sensitivity_col].to_numpy().tolist()
+
         if wavelengths and sensitivities:
             detectors[detector_name] = {
                 'wavelengths': wavelengths,
                 'sensitivity': sensitivities,
-                'type': detector_category
+                'type': type_val  # or use a fixed label if needed
             }
+
     return detectors
 
 # -----------------------------------------------------------------------------
@@ -638,7 +646,10 @@ with col2:
                     label = f"Filter {i+1}"
                 # Convert transmission to Optical Density: OD = -log10(T)
                 transmission = fs['transmission'].to_numpy()
-                optical_density = np.where(transmission > 0, -np.log10(transmission), np.nan)
+                try:
+                    optical_density = np.where(transmission > 0, -np.log10(transmission), np.nan)
+                except:
+                    pass
                 fig_fd.add_trace(go.Scatter(
                     x=fs['wavelength'].to_numpy(),
                     y=optical_density,
